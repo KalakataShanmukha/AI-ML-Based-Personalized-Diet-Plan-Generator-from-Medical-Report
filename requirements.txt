@@ -1,0 +1,8 @@
+streamlit
+pandas
+joblib
+lightgbm
+pdfplumber
+pytesseract
+Pillow
+spacy
