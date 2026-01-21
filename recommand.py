@@ -1,0 +1,212 @@
+import streamlit as st
+import pandas as pd
+import pdfplumber
+import pytesseract
+from PIL import Image
+import spacy
+import json
+import random
+import re
+
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+
+# -------------------- PAGE CONFIG --------------------
+st.set_page_config(
+    page_title="AI_DietPlanner",
+    page_icon="🥗",
+    layout="centered"
+)
+
+# -------------------- TITLE --------------------
+st.markdown("""
+<h1 style='text-align:center;'>🥗 AI_DietPlanner</h1>
+<p style='text-align:center;color:gray;'>AI-based Personalized Diet Recommendation System</p>
+<hr>
+""", unsafe_allow_html=True)
+
+# -------------------- LOAD NLP --------------------
+@st.cache_resource
+def load_spacy():
+    return spacy.blank("en")
+
+nlp = load_spacy()
+
+# -------------------- TEXT EXTRACTION --------------------
+def extract_text(uploaded_file):
+    ext = uploaded_file.name.split(".")[-1].lower()
+    text = ""
+
+    if ext == "pdf":
+        with pdfplumber.open(uploaded_file) as pdf:
+            for page in pdf.pages:
+                if page.extract_text():
+                    text += page.extract_text() + "\n"
+
+    elif ext in ["png", "jpg", "jpeg"]:
+        img = Image.open(uploaded_file)
+        text = pytesseract.image_to_string(img)
+
+    elif ext == "txt":
+        text = uploaded_file.read().decode("utf-8")
+
+    elif ext == "csv":
+        df = pd.read_csv(uploaded_file)
+        text = df.to_string()
+
+    return text.strip()
+
+# -------------------- PATIENT INFO EXTRACTION --------------------
+def extract_patient_info(text):
+    name = "Not Found"
+    age = "Not Found"
+
+    name_match = re.search(r"Name[:\-]?\s*([A-Za-z ]+)", text, re.I)
+    age_match = re.search(r"Age[:\-]?\s*(\d{1,3})", text)
+
+    if name_match:
+        name = name_match.group(1).strip()
+    if age_match:
+        age = age_match.group(1)
+
+    return name, age
+
+# -------------------- DIET GENERATION --------------------
+def generate_diet(text):
+    text = text.lower()
+
+    if "diabetes" in text:
+        condition = "Diabetes"
+        avoid = ["Sugar", "White rice", "Soft drinks"]
+    elif "blood pressure" in text or "hypertension" in text:
+        condition = "Hypertension"
+        avoid = ["Salt", "Pickles", "Processed food"]
+    elif "cholesterol" in text:
+        condition = "High Cholesterol"
+        avoid = ["Fried food", "Butter", "Red meat"]
+    else:
+        condition = "General Health"
+        avoid = ["Junk food"]
+
+    lifestyle = [
+        "Exercise 30 minutes daily",
+        "Drink 2–3 liters of water",
+        "Sleep at least 7 hours"
+    ]
+
+    meal_options = {
+        "Breakfast": [
+            "Oats with fruits", "Vegetable upma", "Idli with sambar"
+        ],
+        "Lunch": [
+            "Brown rice with dal", "Chapati with veg curry", "Millet khichdi"
+        ],
+        "Snacks": [
+            "Fruit bowl", "Roasted nuts", "Sprouts salad"
+        ],
+        "Dinner": [
+            "Vegetable soup", "Grilled vegetables", "Light salad"
+        ]
+    }
+
+    rows = []
+    for day in range(1, 8):
+        rows.append({
+            "Day": f"Day {day}",
+            "Breakfast": random.choice(meal_options["Breakfast"]),
+            "Lunch": random.choice(meal_options["Lunch"]),
+            "Snacks": random.choice(meal_options["Snacks"]),
+            "Dinner": random.choice(meal_options["Dinner"])
+        })
+
+    df = pd.DataFrame(rows)
+    return condition, avoid, lifestyle, df
+
+# -------------------- PDF GENERATION --------------------
+def generate_pdf(name, age, condition, df, avoid, lifestyle):
+    path = "/mnt/data/Diet_Report.pdf"
+    doc = SimpleDocTemplate(path, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph("AI Diet Planner – Health Report", styles["Title"]))
+    elements.append(Paragraph(f"<b>Name:</b> {name}", styles["Normal"]))
+    elements.append(Paragraph(f"<b>Age:</b> {age}", styles["Normal"]))
+    elements.append(Paragraph(f"<b>Condition:</b> {condition}", styles["Normal"]))
+    elements.append(Paragraph("<br/>", styles["Normal"]))
+
+    table_data = [df.columns.tolist()] + df.values.tolist()
+    table = Table(table_data)
+
+    table.setStyle(TableStyle([
+        ("GRID", (0,0), (-1,-1), 1, colors.black),
+        ("BACKGROUND", (0,0), (-1,0), colors.lightgreen),
+        ("ALIGN", (0,0), (-1,-1), "CENTER")
+    ]))
+
+    elements.append(table)
+    elements.append(Paragraph("<br/>", styles["Normal"]))
+
+    elements.append(Paragraph("<b>Foods to Avoid</b>", styles["Heading2"]))
+    for a in avoid:
+        elements.append(Paragraph(f"- {a}", styles["Normal"]))
+
+    elements.append(Paragraph("<br/>", styles["Normal"]))
+    elements.append(Paragraph("<b>Lifestyle Recommendations</b>", styles["Heading2"]))
+    for l in lifestyle:
+        elements.append(Paragraph(f"- {l}", styles["Normal"]))
+
+    doc.build(elements)
+    return path
+
+# -------------------- USER INPUT --------------------
+uploaded_file = st.file_uploader(
+    "📄 Upload Medical Report",
+    type=["pdf", "png", "jpg", "jpeg", "txt", "csv"]
+)
+
+if st.button("🍽 Generate Diet Plan") and uploaded_file:
+
+    text = extract_text(uploaded_file)
+    patient_name, patient_age = extract_patient_info(text)
+    condition, avoid, lifestyle, diet_df = generate_diet(text)
+
+    # ---------- DISPLAY ----------
+    st.subheader("👤 Patient Information")
+    st.write(f"**Name:** {patient_name}")
+    st.write(f"**Age:** {patient_age}")
+    st.write(f"**Condition:** {condition}")
+
+    st.subheader("📊 7-Day Diet Plan")
+    st.dataframe(diet_df, use_container_width=True)
+
+    st.subheader("❌ Foods to Avoid")
+    st.write(", ".join(avoid))
+
+    st.subheader("🏃 Lifestyle Recommendations")
+    for l in lifestyle:
+        st.write("•", l)
+
+    # ---------- DOWNLOADS ----------
+    pdf_path = generate_pdf(patient_name, patient_age, condition, diet_df, avoid, lifestyle)
+
+    with open(pdf_path, "rb") as f:
+        st.download_button("📄 Download PDF Report", f, "Diet_Report.pdf")
+
+    st.download_button(
+        "📥 Download JSON",
+        json.dumps(diet_df.to_dict(), indent=4),
+        "diet_plan.json"
+    )
+
+# -------------------- BACKGROUND CSS --------------------
+st.markdown("""
+<style>
+.stApp {
+    background-image: url("https://d1csarkz8obe9u.cloudfront.net/posterpreviews/powerpoint-healthy-fruits-background-design-template.jpg");
+    background-size: cover;
+}
+</style>
+""", unsafe_allow_html=True)
